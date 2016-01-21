@@ -1,0 +1,162 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<modification>
+	<name>Send24 Order</name>
+	<code>send24order</code>
+    <version>1.0</version>
+    <author>Roman Barbotkin</author>
+	<link>http://send24.com/</link>
+
+      <file path="catalog/model/checkout/order.php">
+          <operation>
+              <search><![CDATA[
+                 	$this->event->trigger('post.order.history.add', $order_id);
+              ]]></search>
+              <add position="after"><![CDATA[
+              	$order_query = $this->db->query("SELECT shipping_code, (SELECT os.name FROM `" . DB_PREFIX . "order_status` os WHERE os.order_status_id = o.order_status_id AND os.language_id = o.language_id) AS order_status FROM `" . DB_PREFIX . "order` o WHERE o.order_id = '" . (int)$order_id . "'");
+
+              	if($order_query->row['shipping_code'] == 'send24.send24'){
+	              	$select_country = 'Ekspres';
+	             	// get/check Express.
+			        $ch = curl_init();
+			        curl_setopt($ch, CURLOPT_URL, "https://send24.com/wc-api/v3/get_products");
+			        curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+			        curl_setopt($ch, CURLOPT_HEADER, FALSE);
+			        curl_setopt($ch, CURLOPT_USERPWD, $this->config->get('send24_consumer_key') . ":" . $this->config->get('send24_consumer_secret'));
+			        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+			            "Content-Type: application/json",
+			            ));
+			        $send24_countries = json_decode(curl_exec($ch));
+			        curl_close($ch);
+			        $n = count($send24_countries);
+			        for ($i = 0; $i < $n; $i++)
+			        {
+			            if ($send24_countries[$i]->title == $select_country)
+			            {   
+			                $cost = $send24_countries[$i]->price;
+			                $send24_product_id = $send24_countries[$i]->product_id;               
+			                $i = $n;
+			                $is_available = true;
+			            }else{ 
+			                $is_available = false;
+			            }
+			        }
+
+			        if($is_available == true){
+			            $insurance_price = 0;
+			            $discount = "false";
+			            $ship_total = $type = $price_need = '';
+
+			            $shipping_data = $this->session->data['shipping_address'];
+
+			            if($select_country == 'Ekspres'){ $select_country = 'Danmark'; $where_shop_id = 'ekspres'; }
+			 			$a= '{
+			                                            "TO_company": "'.$shipping_data['company'].'",
+			                                            "TO_first_name": "'.$shipping_data['firstname'].'",
+			                                            "TO_last_name": "'.$shipping_data['lastname'].'",
+			                                            "TO_phone": "'.$this->customer->getTelephone().'",
+			                                            "TO_email": "'.$this->customer->getEmail().'",
+			                                            "TO_country": "'.$select_country.'",
+			                                            "TO_city": "'.$shipping_data['city'].'",
+			                                            "TO_postcode": "'.$shipping_data['postcode'].'",
+			                                            "Insurance" : "'.$insurance_price.'",
+			                                            "Weight": "5",
+			                                            "TO_address": "'.$shipping_data['address_1'].'",
+			                                            "WHAT_product_id": "'.$send24_product_id.'",
+			                                            "WHERE_shop_id": "'.$where_shop_id.'",
+			                                            "discount": "'.$discount.'",
+			                                            "type": "'.$type.'",
+			                                            "need_points": "'.$price_need.'",
+			                                            "total": "'.$ship_total.'",
+			                                            "ship_mail": "'.$this->customer->getEmail().'",
+			                                            "bill_mail": "'.$this->customer->getEmail().'"
+			                                            }';
+
+			            // Create order.
+			            $ch = curl_init();
+			            curl_setopt($ch, CURLOPT_URL, "https://send24.com/wc-api/v3/create_order");
+			            curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+			            curl_setopt($ch, CURLOPT_HEADER, FALSE);
+			            curl_setopt($ch, CURLOPT_POST, TRUE);
+			            curl_setopt($ch, CURLOPT_USERPWD, $this->config->get('send24_consumer_key') . ":" . $this->config->get('send24_consumer_secret'));
+			            curl_setopt($ch, CURLOPT_POSTFIELDS, '
+			                                            {
+			                                            "TO_company": "'.$shipping_data['company'].'",
+			                                            "TO_first_name": "'.$shipping_data['firstname'].'",
+			                                            "TO_last_name": "'.$shipping_data['lastname'].'",
+			                                            "TO_phone": "'.$this->customer->getTelephone().'",
+			                                            "TO_email": "'.$this->customer->getEmail().'",
+			                                            "TO_country": "'.$select_country.'",
+			                                            "TO_city": "'.$shipping_data['city'].'",
+			                                            "TO_postcode": "'.$shipping_data['postcode'].'",
+			                                            "Insurance" : "'.$insurance_price.'",
+			                                            "Weight": "5",
+			                                            "TO_address": "'.$shipping_data['address_1'].'",
+			                                            "WHAT_product_id": "'.$send24_product_id.'",
+			                                            "WHERE_shop_id": "'.$where_shop_id.'",
+			                                            "discount": "'.$discount.'",
+			                                            "type": "'.$type.'",
+			                                            "need_points": "'.$price_need.'",
+			                                            "total": "'.$ship_total.'",
+			                                            "ship_mail": "'.$this->customer->getEmail().'",
+			                                            "bill_mail": "'.$this->customer->getEmail().'"
+			                                            }
+			                                            ');
+			            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+			                "Content-Type: application/json",
+			            ));
+			            $response = curl_exec($ch);
+			            $response_order = json_decode($response, JSON_FORCE_OBJECT);
+
+
+	            		$today = date('Y-m-d H:i:s');
+	      				extract($response_order);
+
+			            $this->db->query("INSERT INTO  send24_order_value (id_order, order_number, link_to_pdf, link_to_doc, link_to_zpl, link_to_epl, track, date_add)  VALUES ('$order_id', '$order_number', '$link_to_pdf', '$link_to_doc', '$link_to_zpl', '$link_to_epl', '$track', '$today');");
+
+			            curl_close($ch);
+			        }
+		        }
+              
+              ]]></add>
+          </operation>
+      </file>
+
+        <file path="admin/controller/sale/order.php">
+          <operation>
+              <search><![CDATA[
+              	$data['help_override'] = $this->language->get('help_override');
+              ]]></search>
+              <add position="before"><![CDATA[
+              	$data['send24_order'] = $this->db->query('SELECT * FROM send24_order_value WHERE id_order = '.$order_id);
+              	]]></add>
+          </operation>
+      	</file>
+      	<file path="admin/view/template/sale/order_info.tpl">
+          <operation>
+              <search index="3"><![CDATA[
+              	 </tr>
+              	]]></search>
+              <add position="after"><![CDATA[
+              	<?php if(!empty($send24_order->row)){ ?>
+              <tr>
+                <td>
+                  <button data-toggle="tooltip" title="" class="btn btn-info btn-xs">
+                  <i class="fa fa-truck fa-fw"></i></button>
+                </td>
+                <td>Track parsel: <a target="_blank" href="<?php echo $send24_order->row['track']; ?>"><?php echo $send24_order->row['track']; ?></a></td>
+              </tr>
+              <tr>
+                <td>Printout:</td>
+                <td>
+                  <a target="_blank" href="<?php echo $send24_order->row['link_to_pdf']; ?>"><button data-toggle="tooltip" title="" class="btn btn-info btn-xs">PDF</button></a>
+                  <a target="_blank" href="<?php echo $send24_order->row['link_to_doc']; ?>"><button data-toggle="tooltip" title="" class="btn btn-info btn-xs">DOC</button></a>
+                  <a target="_blank" href="<?php echo $send24_order->row['link_to_zpl']; ?>"><button data-toggle="tooltip" title="" class="btn btn-info btn-xs">ZPL</button></a>
+                  <a target="_blank" href="<?php echo $send24_order->row['link_to_epl']; ?>"><button data-toggle="tooltip" title="" class="btn btn-info btn-xs">EPL</button></a>
+                </td>
+              </tr>
+              <?php } ?>
+              	]]></add>
+          </operation>
+      	</file>
+
+</modification>
